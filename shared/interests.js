@@ -15,13 +15,18 @@ const INTEREST_PRESETS = [
 ];
 
 function keywordsForLabels(labels) {
-  const out = [];
-  labels.forEach((label) => {
-    const preset = INTEREST_PRESETS.find((p) => p.label === label);
-    const list = preset ? preset.keywords : [label];
-    list.forEach((k) => {
-      if (!out.some((x) => x.toLowerCase() === k.toLowerCase())) out.push(k);
+  try {
+    const out = [];
+    labels.forEach((label) => {
+      const preset = INTEREST_PRESETS.find((p) => p.label === label);
+      const list = preset ? preset.keywords : [label];
+      list.forEach((k) => {
+        if (!out.some((x) => x.toLowerCase() === k.toLowerCase())) out.push(k);
+      });
     });
-  });
-  return out;
+    return out;
+  } catch (error) {
+    console.error("Error in keywordsForLabels:", error);
+    return [];
+  }
 }

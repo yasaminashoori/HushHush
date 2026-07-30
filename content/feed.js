@@ -138,38 +138,43 @@ function runClassifyBatch() {
   );
 }
 
+// error handling for filterTweets 
 function filterTweets() {
-  const tweets = document.querySelectorAll('article[data-testid="tweet"]');
-  tweets.forEach((tweet) => {
-    const text = getTweetText(tweet);
-    const id = getTweetId(tweet);
+  try {
+    const tweets = document.querySelectorAll('article[data-testid="tweet"]');
+    tweets.forEach((tweet) => {
+      const text = getTweetText(tweet);
+      const id = getTweetId(tweet);
 
-    if (
-      settings.blocked.some((w) => normalize(text).includes(normalize(w))) ||
-      settings.concepts.some((w) => normalize(text).includes(normalize(w)))
-    ) {
-      applyVisibility(tweet, true, "muted");
-      ensureBounceBtn(tweet);
-      return;
-    }
-
-    if (settings.aiOn) {
-      const decision = aiDecision.get(id);
-      if (decision) {
-        applyVisibility(tweet, !decision.show, decision.reason);
-      } else {
-        applyVisibility(tweet, false, "pending");
-        scheduleClassify();
+      if (
+        settings.blocked.some((w) => normalize(text).includes(normalize(w))) ||
+        settings.concepts.some((w) => normalize(text).includes(normalize(w)))
+      ) {
+        applyVisibility(tweet, true, "muted");
+        ensureBounceBtn(tweet);
+        return;
       }
-    } else {
-      applyVisibility(tweet, keywordShouldHide(text), "keyword");
-    }
 
-    ensureBounceBtn(tweet);
-  });
+      if (settings.aiOn) {
+        const decision = aiDecision.get(id);
+        if (decision) {
+          applyVisibility(tweet, !decision.show, decision.reason);
+        } else {
+          applyVisibility(tweet, false, "pending");
+          scheduleClassify();
+        }
+      } else {
+        applyVisibility(tweet, keywordShouldHide(text), "keyword");
+      }
 
-  filteredCount = document.querySelectorAll('[data-hh-hide="1"]').length;
-  updateFilteredCountUi();
+      ensureBounceBtn(tweet);
+    });
+
+    filteredCount = document.querySelectorAll('[data-hh-hide="1"]').length;
+    updateFilteredCountUi();
+  } catch (error) {
+    console.error("Error in filterTweets:", error);
+  }
 }
 
 function ensureBounceBtn(tweet) {
@@ -266,36 +271,46 @@ async function addFilterWord(word) {
   if (aiOn) scheduleClassify();
 }
 
+// adding erorr handling for removeFilterWord
 async function removeFilterWord(word) {
-  const data = await chrome.storage.local.get({ concepts: [] });
-  const concepts = (data.concepts || []).filter(
-    (c) => c.toLowerCase() !== word.toLowerCase()
-  );
-  await chrome.storage.local.set({ concepts });
-  chrome.runtime.sendMessage({ type: "clearAiCache" });
-  aiDecision.clear();
-  settings.concepts = concepts;
-  renderMuteChips();
-  filterTweets();
-  if (settings.aiOn) scheduleClassify();
+  try {
+    const data = await chrome.storage.local.get({ concepts: [] });
+    const concepts = (data.concepts || []).filter(
+      (c) => c.toLowerCase() !== word.toLowerCase()
+    );
+    await chrome.storage.local.set({ concepts });
+    chrome.runtime.sendMessage({ type: "clearAiCache" });
+    aiDecision.clear();
+    settings.concepts = concepts;
+    renderMuteChips();
+    filterTweets();
+    if (settings.aiOn) scheduleClassify();
+  } catch (error) {
+    console.error("Error in removeFilterWord:", error);
+  }
 }
 
+// adding error handling for persistInterests
 async function persistInterests(labels) {
-  const allowed = keywordsForLabels(labels);
-  await chrome.storage.sync.set({
-    interestLabels: labels,
-    allowed,
-    randomOn: labels.length > 0,
-    randomPercent: 10,
-  });
-  settings.interestLabels = labels;
-  settings.allowed = allowed;
-  settings.randomOn = labels.length > 0;
-  chrome.runtime.sendMessage({ type: "clearAiCache" });
-  aiDecision.clear();
-  renderInterestChips();
-  filterTweets();
-  if (settings.aiOn) scheduleClassify();
+  try {
+    const allowed = keywordsForLabels(labels);
+    await chrome.storage.sync.set({
+      interestLabels: labels,
+      allowed,
+      randomOn: labels.length > 0,
+      randomPercent: 10,
+    });
+    settings.interestLabels = labels;
+    settings.allowed = allowed;
+    settings.randomOn = labels.length > 0;
+    chrome.runtime.sendMessage({ type: "clearAiCache" });
+    aiDecision.clear();
+    renderInterestChips();
+    filterTweets();
+    if (settings.aiOn) scheduleClassify();
+  } catch (error) {
+    console.error("Error in persistInterests:", error);
+  }
 }
 
 function detectTheme() {

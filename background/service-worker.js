@@ -33,21 +33,36 @@ function cachePut(key, value) {
   decisionCache.set(key, value);
 }
 
+// adding error handling
 async function loadConfig() {
-  const local = await chrome.storage.local.get({
-    aiOn: false,
-    apiKey: "",
-    provider: "groq",
-    customUrl: "",
-    customModel: "",
-    concepts: [],
-  });
-  const sync = await chrome.storage.sync.get({ allowed: [], blocked: [] });
-  return {
-    ...local,
-    allowed: sync.allowed || [],
-    blocked: sync.blocked || [],
-  };
+  try {
+    const local = await chrome.storage.local.get({
+      aiOn: false,
+      apiKey: "",
+      provider: "groq",
+      customUrl: "",
+      customModel: "",
+      concepts: [],
+    });
+    const sync = await chrome.storage.sync.get({ allowed: [], blocked: [] });
+    return {
+      ...local,
+      allowed: sync.allowed || [],
+      blocked: sync.blocked || [],
+    };
+  } catch (error) {
+    console.error("Error in loadConfig:", error);
+    return {
+      aiOn: false,
+      apiKey: "",
+      provider: "groq",
+      customUrl: "",
+      customModel: "",
+      concepts: [],
+      allowed: [],
+      blocked: [],
+    };
+  }
 }
 
 async function chat(messages, config) {
@@ -115,68 +130,80 @@ function classifyMessages(tweets, config) {
   ];
 }
 
+// adding error handling
 async function classifyBatch(texts) {
-  const config = await loadConfig();
-  if (!config.aiOn || !config.apiKey) {
-    return texts.map(() => ({ show: null, reason: "off", source: "off" }));
-  }
-
-  const results = new Array(texts.length);
-  const pendingIdx = [];
-  const pendingText = [];
-
-  texts.forEach((text, i) => {
-    const key = decisionKey(text, config.allowed, config.blocked, config.concepts);
-    if (decisionCache.has(key)) {
-      results[i] = { ...decisionCache.get(key), source: "cache" };
-    } else {
-      pendingIdx.push(i);
-      pendingText.push(text.slice(0, 500));
+  try {
+    const config = await loadConfig();
+    if (!config.aiOn || !config.apiKey) {
+      return texts.map(() => ({ show: null, reason: "off", source: "off" }));
     }
-  });
 
-  const size = 8;
-  for (let start = 0; start < pendingText.length; start += size) {
-    const sliceText = pendingText.slice(start, start + size);
-    const sliceIdx = pendingIdx.slice(start, start + size);
-    try {
-      const parsed = await chat(classifyMessages(sliceText, config), config);
-      const list = Array.isArray(parsed.results) ? parsed.results : [];
-      sliceIdx.forEach((orig, j) => {
-        const item = list.find((r) => r.id === `t${j}`) || list[j] || {};
-        const decision = { show: item.show !== false, reason: item.reason || "" };
-        cachePut(decisionKey(texts[orig], config.allowed, config.blocked, config.concepts), decision);
-        results[orig] = { ...decision, source: "llm" };
-      });
-    } catch (err) {
-      sliceIdx.forEach((orig) => {
-        results[orig] = { show: true, reason: String(err.message || err), source: "error" };
-      });
+    const results = new Array(texts.length);
+    const pendingIdx = [];
+    const pendingText = [];
+
+    texts.forEach((text, i) => {
+      const key = decisionKey(text, config.allowed, config.blocked, config.concepts);
+      if (decisionCache.has(key)) {
+        results[i] = { ...decisionCache.get(key), source: "cache" };
+      } else {
+        pendingIdx.push(i);
+        pendingText.push(text.slice(0, 500));
+      }
+    });
+
+    const size = 8;
+    for (let start = 0; start < pendingText.length; start += size) {
+      const sliceText = pendingText.slice(start, start + size);
+      const sliceIdx = pendingIdx.slice(start, start + size);
+      try {
+        const parsed = await chat(classifyMessages(sliceText, config), config);
+        const list = Array.isArray(parsed.results) ? parsed.results : [];
+        sliceIdx.forEach((orig, j) => {
+          const item = list.find((r) => r.id === `t${j}`) || list[j] || {};
+          const decision = { show: item.show !== false, reason: item.reason || "" };
+          cachePut(decisionKey(texts[orig], config.allowed, config.blocked, config.concepts), decision);
+          results[orig] = { ...decision, source: "llm" };
+        });
+      } catch (err) {
+        sliceIdx.forEach((orig) => {
+          results[orig] = { show: true, reason: String(err.message || err), source: "error" };
+        });
+      }
     }
-  }
 
-  return results;
+    return results;
+  } catch (error) {
+    console.error("Error in classifyBatch:", error);
+    return texts.map(() => ({ show: true, reason: "error", source: "error" }));
+  }
 }
 
+// adding error handling
 async function suggestMutes(tweetText) {
-  const config = await loadConfig();
-  if (!config.apiKey) throw new Error("API key missing");
+  try {
+    const config = await loadConfig();
+    if (!config.apiKey) throw new Error("API key missing");
 
-  const parsed = await chat(
-    [
-      {
-        role: "system",
-        content:
-          'Suggest exactly 3 short mute phrases for a disliked post. Match the post language. JSON: {"reasons":["...","...","..."]}',
-      },
-      { role: "user", content: tweetText.slice(0, 800) },
-    ],
-    config
-  );
+    const parsed = await chat(
+      [
+        {
+          role: "system",
+          content:
+            'Suggest exactly 3 short mute phrases for a disliked post. Match the post language. JSON: {"reasons":["...","...","..."]}',
+        },
+        { role: "user", content: tweetText.slice(0, 800) },
+      ],
+      config
+    );
 
-  const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.slice(0, 3) : [];
-  while (reasons.length < 3) reasons.push("off-topic");
-  return reasons;
+    const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.slice(0, 3) : [];
+    while (reasons.length < 3) reasons.push("off-topic");
+    return reasons;
+  } catch (error) {
+    console.error("Error in suggestMutes:", error);
+    return ["spam", "off-topic", "AI slop"];
+  }
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
