@@ -2,6 +2,7 @@ let settings = {
   blocked: [],
   allowed: [],
   concepts: [],
+  softBlocked: [],
   interestLabels: [],
   randomOn: true,
   randomPercent: 10,
@@ -10,6 +11,7 @@ let settings = {
 
 const aiDecision = new Map();
 const pendingIds = new Set();
+const loggedTweets = new Set();
 let classifyTimer = null;
 let filteredCount = 0;
 let placeholderTimer = null;
@@ -38,6 +40,35 @@ function normalize(text) {
   return text.toLowerCase();
 }
 
+function extractTextWithEmoji(root) {
+  if (!root) return "";
+  let out = "";
+
+  const walk = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      out += node.textContent || "";
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+    if (node.tagName === "IMG") {
+      const alt = node.getAttribute("alt") || "";
+      const src = node.getAttribute("src") || "";
+      if (alt && (src.includes("/emoji/") || src.includes("twimg.com/emoji"))) {
+        out += alt;
+      } else if (alt && !src) {
+        out += alt;
+      }
+      return;
+    }
+
+    for (const child of node.childNodes) walk(child);
+  };
+
+  walk(root);
+  return out.replace(/\s+/g, " ").trim();
+}
+
 function hashCode(str) {
   let h = 0;
   for (let i = 0; i < str.length; i++) {
@@ -59,7 +90,30 @@ function getTweetText(tweet) {
   const body =
     tweet.querySelector('[data-testid="tweetText"]') ||
     tweet.querySelector("[lang]");
-  return (body?.innerText || tweet.innerText || "").trim();
+  if (body) {
+    const withEmoji = extractTextWithEmoji(body);
+    if (withEmoji) return withEmoji;
+  }
+  // fallback
+  return extractTextWithEmoji(tweet) || (tweet.innerText || "").trim();
+}
+
+function getTweetDisplayName(tweet) {
+ const userNameBlock = tweet.querySelector('[data-testid="User-Name"]');
+  if (!userNameBlock) return "";
+
+  const nameLink =
+    userNameBlock.querySelector('a[href^="/"]:not([href*="/status/"])') ||
+    userNameBlock.querySelector('a[href^="/"]');
+
+  return extractTextWithEmoji(nameLink || userNameBlock);
+}
+
+function shouldSoftBlock(tweet) {
+  if (!settings.softBlocked.length) return false;
+  const name = normalize(getTweetDisplayName(tweet));
+  if (!name) return false;
+  return settings.softBlocked.some((w) => name.includes(normalize(w)));
 }
 
 function keywordShouldHide(tweetText) {
@@ -82,8 +136,14 @@ function keywordShouldHide(tweetText) {
 
 function applyVisibility(tweet, hide, reason) {
   const cell = tweet.closest('div[data-testid="cellInnerDiv"]') || tweet;
-  cell.style.display = hide ? "none" : "";
-  cell.dataset.hhHide = hide ? "1" : "0";
+  const next = hide ? "1" : "0";
+
+  if (cell.dataset.hhHide === next) {
+    if (reason) cell.dataset.hhReason = reason;
+    return;
+  }
+
+  cell.dataset.hhHide = next;
   if (reason) cell.dataset.hhReason = reason;
 }
 
@@ -138,9 +198,43 @@ function runClassifyBatch() {
   );
 }
 
+function logTweetUser(tweet) {
+  const tweetId = getTweetId(tweet);
+  if (loggedTweets.has(tweetId)) return;
+  loggedTweets.add(tweetId);
+
+  let name = null;
+  const userNameBlock = tweet.querySelector('[data-testid="User-Name"]');
+  if (userNameBlock) {
+    const nameLink =
+      userNameBlock.querySelector('a[href^="/"] span') ||
+      userNameBlock.querySelector('a[href^="/"]');
+    name = (nameLink?.textContent || "").trim() || null;
+  }
+
+  let userId = null;
+  const userIdLink = tweet.querySelector('a[href*="/i/user/"]');
+  if (userIdLink) {
+    const m = userIdLink.getAttribute("href")?.match(/\/i\/user\/(\d+)/);
+    if (m) userId = m[1];
+  }
+
+  if (!userId) {
+    const elWithId = tweet.querySelector("[data-user-id]");
+    if (elWithId) userId = elWithId.getAttribute("data-user-id");
+  }
+}
+
 function filterTweets() {
   const tweets = document.querySelectorAll('article[data-testid="tweet"]');
   tweets.forEach((tweet) => {
+    logTweetUser(tweet);
+
+    if (shouldSoftBlock(tweet)) {
+      applyVisibility(tweet, true, "soft-block");
+      return;
+    }
+
     const text = getTweetText(tweet);
     const id = getTweetId(tweet);
 
@@ -149,7 +243,6 @@ function filterTweets() {
       settings.concepts.some((w) => normalize(text).includes(normalize(w)))
     ) {
       applyVisibility(tweet, true, "muted");
-      ensureBounceBtn(tweet);
       return;
     }
 
@@ -280,6 +373,32 @@ async function removeFilterWord(word) {
   if (settings.aiOn) scheduleClassify();
 }
 
+async function addSoftBlock(word) {
+  const w = (word || "").trim();
+  if (!w) return;
+
+  const data = await chrome.storage.local.get({ softBlocked: [] });
+  const softBlocked = data.softBlocked || [];
+  if (!softBlocked.some((c) => c.toLowerCase() === w.toLowerCase())) {
+    softBlocked.push(w);
+  }
+  await chrome.storage.local.set({ softBlocked });
+  settings.softBlocked = softBlocked;
+  renderSoftBlockChips();
+  filterTweets();
+}
+
+async function removeSoftBlock(word) {
+  const data = await chrome.storage.local.get({ softBlocked: [] });
+  const softBlocked = (data.softBlocked || []).filter(
+    (c) => c.toLowerCase() !== word.toLowerCase()
+  );
+  await chrome.storage.local.set({ softBlocked });
+  settings.softBlocked = softBlocked;
+  renderSoftBlockChips();
+  filterTweets();
+}
+
 async function persistInterests(labels) {
   const allowed = keywordsForLabels(labels);
   await chrome.storage.sync.set({
@@ -333,6 +452,33 @@ function renderMuteChips() {
     del.setAttribute("aria-label", "Remove");
     del.textContent = "×";
     del.addEventListener("click", () => removeFilterWord(word));
+    chip.appendChild(label);
+    chip.appendChild(del);
+    box.appendChild(chip);
+  });
+}
+
+function renderSoftBlockChips() {
+  const box = document.getElementById("hh-account-chips");
+  if (!box) return;
+  box.innerHTML = "";
+
+  if (!settings.softBlocked.length) {
+    box.innerHTML =
+      '<span class="hh-empty">No soft-blocked names — type a name fragment &amp; Enter</span>';
+    return;
+  }
+
+  settings.softBlocked.forEach((word) => {
+    const chip = document.createElement("div");
+    chip.className = "hh-chip";
+    const label = document.createElement("span");
+    label.textContent = word;
+    const del = document.createElement("button");
+    del.type = "button";
+    del.setAttribute("aria-label", "Remove");
+    del.textContent = "×";
+    del.addEventListener("click", () => removeSoftBlock(word));
     chip.appendChild(label);
     chip.appendChild(del);
     box.appendChild(chip);
@@ -432,6 +578,23 @@ function bindMuteTab(body) {
   startPlaceholderAnimation(placeholder, input);
 }
 
+function bindAccountsTab(body) {
+  const input = body.querySelector("#hh-account-input");
+  if (!input) return;
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const val = input.value.trim();
+      if (!val) return;
+      input.value = "";
+      addSoftBlock(val);
+    }
+  });
+
+  renderSoftBlockChips();
+}
+
 function bindInterestTab(body) {
   const input = body.querySelector("#hh-interest-input");
   if (!input) return;
@@ -456,6 +619,7 @@ function renderPanelBody(root) {
   body.innerHTML = `
     <div class="hh-tabs">
       <button type="button" class="hh-tab ${activeTab === "mute" ? "active" : ""}" data-tab="mute">Mute</button>
+      <button type="button" class="hh-tab ${activeTab === "accounts" ? "active" : ""}" data-tab="accounts">Accounts</button>
       <button type="button" class="hh-tab ${activeTab === "interests" ? "active" : ""}" data-tab="interests">Interests</button>
     </div>
     <div class="hh-tab-panel" id="hh-panel-mute" ${activeTab === "mute" ? "" : "hidden"}>
@@ -465,6 +629,14 @@ function renderPanelBody(root) {
       </div>
       <div class="hh-section-label">Muted</div>
       <div class="hh-chips" id="hh-mute-chips"></div>
+    </div>
+    <div class="hh-tab-panel" id="hh-panel-accounts" ${activeTab === "accounts" ? "" : "hidden"}>
+      <p class="hh-hint">Hide posts whose display name contains these fragments.</p>
+      <div class="hh-input-wrap">
+        <input class="hh-input" id="hh-account-input" type="text" placeholder="e.g. casino, news, ..." autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="hh-section-label">Soft blocked</div>
+      <div class="hh-chips" id="hh-account-chips"></div>
     </div>
     <div class="hh-tab-panel" id="hh-panel-interests" ${activeTab === "interests" ? "" : "hidden"}>
       <p class="hh-hint">Keep your signal, hush the rest.</p>
@@ -492,6 +664,7 @@ function renderPanelBody(root) {
   });
 
   if (activeTab === "mute") bindMuteTab(body);
+  else if (activeTab === "accounts") bindAccountsTab(body);
   else bindInterestTab(body);
   updateFilteredCountUi();
 }
@@ -532,6 +705,7 @@ function ensurePanel(forceBody) {
     renderPanelBody(root);
   } else {
     renderMuteChips();
+    renderSoftBlockChips();
     renderInterestChips();
     updateFilteredCountUi();
   }
@@ -548,18 +722,22 @@ function loadSettingsAndFilter() {
       randomPercent: 10,
     },
     (sync) => {
-      chrome.storage.local.get({ aiOn: false, apiKey: "", concepts: [] }, (local) => {
-        settings.blocked = (sync.blocked || []).filter(Boolean);
-        settings.allowed = (sync.allowed || []).filter(Boolean);
-        settings.interestLabels = (sync.interestLabels || []).filter(Boolean);
-        settings.randomOn = sync.randomOn;
-        settings.randomPercent = sync.randomPercent;
-        settings.concepts = (local.concepts || []).filter(Boolean);
-        settings.aiOn = !!(local.aiOn && local.apiKey);
-        ensurePanel(false);
-        filterTweets();
-        if (settings.aiOn) scheduleClassify();
-      });
+      chrome.storage.local.get(
+        { aiOn: false, apiKey: "", concepts: [], softBlocked: [] },
+        (local) => {
+          settings.blocked = (sync.blocked || []).filter(Boolean);
+          settings.allowed = (sync.allowed || []).filter(Boolean);
+          settings.interestLabels = (sync.interestLabels || []).filter(Boolean);
+          settings.randomOn = sync.randomOn;
+          settings.randomPercent = sync.randomPercent;
+          settings.concepts = (local.concepts || []).filter(Boolean);
+          settings.softBlocked = (local.softBlocked || []).filter(Boolean);
+          settings.aiOn = !!(local.aiOn && local.apiKey);
+          ensurePanel(false);
+          filterTweets();
+          if (settings.aiOn) scheduleClassify();
+        }
+      );
     }
   );
 }
@@ -573,6 +751,7 @@ observer.observe(document.body, { childList: true, subtree: true });
 chrome.storage.onChanged.addListener(() => {
   aiDecision.clear();
   pendingIds.clear();
+  loggedTweets.clear();
   loadSettingsAndFilter();
 });
 

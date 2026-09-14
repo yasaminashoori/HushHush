@@ -98,7 +98,7 @@
 
 .hh-tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 4px;
   background: var(--hh-bg-soft);
   border: 1px solid var(--hh-line);
@@ -359,4 +359,16 @@
 
 [hidden] {
   display: none !important;
+}
+
+div[data-testid="cellInnerDiv"][data-hh-hide="1"] {
+  overflow: hidden !important;
+  max-height: 0 !important;
+  min-height: 0 !important;
+  height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
 }

@@ -3,7 +3,9 @@
   "name": "HushHush",
   "description": "Mute noise on X. Keep posts you care about, hush the rest.",
   "version": "1.0.0",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "host_permissions": [
     "*://twitter.com/*",
     "*://x.com/*",
@@ -12,13 +14,23 @@
     "https://openrouter.ai/*"
   ],
   "background": {
-    "service_worker": "background/service-worker.js"
+    "scripts": [
+      "background/service-worker.js"
+    ]
   },
   "content_scripts": [
     {
-      "matches": ["*://twitter.com/*", "*://x.com/*"],
-      "js": ["shared/interests.js", "content/feed.js"],
-      "css": ["content/panel.css"],
+      "matches": [
+        "*://twitter.com/*",
+        "*://x.com/*"
+      ],
+      "js": [
+        "shared/interests.js",
+        "content/feed.js"
+      ],
+      "css": [
+        "content/panel.css"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -32,7 +44,10 @@
       "128": "assets/icons/icon128.png"
     }
   },
-  "options_page": "options/index.html",
+  "options_ui": {
+    "page": "options/index.html",
+    "open_in_tab": true
+  },
   "icons": {
     "16": "assets/icons/icon16.png",
     "32": "assets/icons/icon32.png",
@@ -41,8 +56,19 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["assets/icons/logo.png"],
-      "matches": ["*://twitter.com/*", "*://x.com/*"]
+      "resources": [
+        "assets/icons/logo.png"
+      ],
+      "matches": [
+        "*://twitter.com/*",
+        "*://x.com/*"
+      ]
     }
-  ]
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "hushhush@local.dev",
+      "strict_min_version": "109.0"
+    }
+  }
 }
